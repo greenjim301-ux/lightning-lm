@@ -172,6 +172,12 @@ void PangolinWindow::SetCurrentScanSize(int current_scan_size) { max_size_of_cur
 void PangolinWindow::LogFrontendPose(const SE3& pose) {
     rerun_stream_->log("world/frontend/car", ToRerunTransform(pose));
     rerun_stream_->log("world/frontend/trajectory", rerun::Points3D({ToRerunPos(pose.translation())}));
+
+    // 平移跟随锚点：只取XY，忽略Z与朝向，对应原Pangolin Follow()的行为（不随车辆转向旋转视角）。
+    // 供blueprint的chase-cam视图(origin="world/follow_anchor")使用。
+    const Vec3d t = pose.translation();
+    rerun_stream_->log("world/follow_anchor",
+                       rerun::Transform3D::from_translation(rerun::Vec3D{float(t.x()), float(t.y()), 0.f}));
 }
 
 }  // namespace lightning::ui
