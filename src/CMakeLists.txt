@@ -33,13 +33,7 @@ add_library(${PROJECT_NAME}.libs SHARED
         utils/pointcloud_utils.cc
 
         ui/pangolin_window.cc
-        ui/pangolin_window_impl.cc
-        ui/pangolin_ui_scene.cc
         ui/ui_wire_server.cc
-        ui/gl_colored_shader.cc
-        ui/ui_car.cc
-        ui/ui_cloud.cc
-        ui/ui_trajectory.cc
 
         core/system/slam.cc
         core/system/loc_system.cc

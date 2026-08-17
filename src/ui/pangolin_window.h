@@ -12,10 +12,13 @@
 
 namespace lightning::ui {
 
-class PangolinWindowImpl;
+class UiWireServer;
 
 /**
- * @note 此类本身不直接涉及任何opengl和pangolin操作，应当放到PangolinWindowImpl中
+ * @note 此类本身不直接涉及任何具体UI实现——实际实现是UiWireServer(见ui/ui_wire_server.h)，
+ *       通过websocket把数据推给跑在浏览器里的wasm UI(ui/wasm_ui_client.cc + ui/pangolin_ui_scene.h)。
+ *       在这条分支(feature/pangolin-web-gl-modernize)上，原生Pangolin桌面窗口实现已经被整个替换掉，
+ *       接口本身完全没变，所以所有调用点(slam.cc/localization.cpp/laser_mapping.cc等)都不用改。
  */
 class PangolinWindow {
    public:
@@ -63,6 +66,6 @@ class PangolinWindow {
     void SetCurrentScanSize(int current_scan_size);
 
    private:
-    std::shared_ptr<PangolinWindowImpl> impl_ = nullptr;
+    std::shared_ptr<UiWireServer> impl_ = nullptr;
 };
 }  // namespace lightning::ui
