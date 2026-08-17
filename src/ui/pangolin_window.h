@@ -10,6 +10,12 @@
 #include "common/nav_state.h"
 #include "common/point_def.h"
 
+#ifdef LIGHTNING_ENABLE_RERUN
+namespace rerun {
+class RecordingStream;
+}
+#endif
+
 namespace lightning::ui {
 
 class PangolinWindowImpl;
@@ -64,5 +70,14 @@ class PangolinWindow {
 
    private:
     std::shared_ptr<PangolinWindowImpl> impl_ = nullptr;
+
+#ifdef LIGHTNING_ENABLE_RERUN
+    /// 将各 Update* 调用同时投递给 rerun，供网页端 web viewer 实时查看
+    /// @note 前向声明以避免把 rerun.hpp 传递给所有包含本头文件的调用方
+    std::unique_ptr<rerun::RecordingStream> rerun_stream_;
+
+    /// UpdateNavState/UpdateRecentPose 共用：更新前端车辆位姿与红色轨迹
+    void LogFrontendPose(const SE3& pose);
+#endif
 };
 }  // namespace lightning::ui

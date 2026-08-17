@@ -18,6 +18,37 @@ find_package(tf2_ros REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
+# rerun_cpp: optional web-viewable visualization backend for ui::PangolinWindow (see src/ui/pangolin_window.cc).
+# Pin this to whatever version the frontend's @rerun-io/web-viewer-react package uses --
+# a C++ SDK and JS viewer of different versions cannot talk to each other.
+option(LIGHTNING_ENABLE_RERUN "Log ui::PangolinWindow updates to rerun for web-based visualization" OFF)
+set(LIGHTNING_RERUN_VERSION "0.36.0" CACHE STRING "rerun_cpp_sdk release tag, must match @rerun-io/web-viewer-react version")
+
+if (LIGHTNING_ENABLE_RERUN)
+    include(FetchContent)
+    FetchContent_Declare(rerun_sdk URL
+            https://github.com/rerun-io/rerun/releases/download/${LIGHTNING_RERUN_VERSION}/rerun_cpp_sdk.zip)
+
+    # rerun_sdk compiles ~hundreds of generated C++ files. CMAKE_CXX_FLAGS(_RELEASE) above keep -g -ggdb
+    # even in Release builds, which makes each of those translation units expensive enough to OOM on
+    # memory-constrained machines when several compile in parallel. Strip debug info for this one
+    # third-party target only (nobody needs to step through generated rerun_sdk code) and restore the
+    # project's normal flags immediately after, so the rest of the codebase is unaffected.
+    set(_lightning_saved_cxx_flags "${CMAKE_CXX_FLAGS}")
+    set(_lightning_saved_cxx_flags_release "${CMAKE_CXX_FLAGS_RELEASE}")
+    foreach (_flag "-ggdb" "-g")
+        string(REPLACE "${_flag}" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+        string(REPLACE "${_flag}" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+    endforeach ()
+
+    FetchContent_MakeAvailable(rerun_sdk)
+
+    set(CMAKE_CXX_FLAGS "${_lightning_saved_cxx_flags}")
+    set(CMAKE_CXX_FLAGS_RELEASE "${_lightning_saved_cxx_flags_release}")
+
+    add_definitions(-DLIGHTNING_ENABLE_RERUN)
+endif ()
+
 # OMP
 find_package(OpenMP)
 if (OPENMP_FOUND)
@@ -68,4 +99,8 @@ set(third_party_libs
         tbb
         ${rosbag2_cpp_LIBRARIES}
 )
+
+if (LIGHTNING_ENABLE_RERUN)
+    list(APPEND third_party_libs rerun_sdk)
+endif ()
 
