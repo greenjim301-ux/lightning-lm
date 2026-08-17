@@ -1,5 +1,6 @@
 find_package(glog REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(Boost REQUIRED COMPONENTS system)
 find_package(PCL REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(Pangolin REQUIRED)
@@ -67,5 +68,7 @@ set(third_party_libs
         ${pcl_conversions_LIBRARIES}
         tbb
         ${rosbag2_cpp_LIBRARIES}
+        Boost::system
+        pthread
 )
 
