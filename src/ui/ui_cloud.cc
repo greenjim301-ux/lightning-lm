@@ -1,7 +1,7 @@
 #include "ui/ui_cloud.h"
 #include "common/options.h"
+#include "ui/gl_colored_shader.h"
 
-#include <GL/gl.h>
 #include <numeric>
 
 namespace lightning::ui {
@@ -10,7 +10,10 @@ std::vector<Vec4f> UiCloud::intensity_color_table_pcl_;
 
 UiCloud::UiCloud(CloudPtr cloud) { SetCloud(cloud, SE3()); }
 
-void UiCloud::SetCustomColor(Vec4f custom_color) { custom_color_ = custom_color; }
+void UiCloud::SetCustomColor(Vec4f custom_color) {
+    custom_color_ = custom_color;
+    color_dirty_ = true;
+}
 
 // 把输入的点云映射为opengl可以渲染的点云
 void UiCloud::SetCloud(CloudPtr cloud, const SE3& pose) {
@@ -45,31 +48,59 @@ void UiCloud::SetCloud(CloudPtr cloud, const SE3& pose) {
         color_data_intensity_[id] =
             Vec4f(pt.intensity / 255.0 * 3.0, pt.intensity / 255.0 * 3.0, pt.intensity / 255.0 * 3.0, 1.0);
     }
+
+    vbo_pos_.Reinitialise(pangolin::GlArrayBuffer, static_cast<GLuint>(xyz_data_.size()), GL_FLOAT, 3,
+                          GL_DYNAMIC_DRAW);
+    if (!xyz_data_.empty()) {
+        vbo_pos_.Upload(xyz_data_);
+    }
+    color_dirty_ = true;
 }
 
-void UiCloud::Render() {
-    // glPointSize(2.0);
-
-    glBegin(GL_POINTS);
-    glPointSize(point_size_);
-
-    for (int i = 0; i < xyz_data_.size(); ++i) {
-        if (use_color_ == UseColor::PCL_COLOR) {
-            glColor4f(color_data_pcl_[i][0], color_data_pcl_[i][1], color_data_pcl_[i][2], ui::opacity);
-        } else if (use_color_ == UseColor::INTENSITY_COLOR) {
-            glColor4f(color_data_intensity_[i][0], color_data_intensity_[i][1], color_data_intensity_[i][2],
-                      ui::opacity);
-        } else if (use_color_ == UseColor::HEIGHT_COLOR) {
-            glColor4f(color_data_height_[i][0], color_data_height_[i][1], color_data_height_[i][2], ui::opacity);
-        } else if (use_color_ == UseColor::GRAY_COLOR) {
-            glColor4f(color_data_gray_[i][0], color_data_gray_[i][1], color_data_gray_[i][2], ui::opacity);
-        } else if (use_color_ = UseColor::CUSTOM_COLOR) {
-            glColor4f(custom_color_[0], custom_color_[1], custom_color_[2], ui::opacity);
-        }
-
-        glVertex3f(xyz_data_[i][0], xyz_data_[i][1], xyz_data_[i][2]);
+void UiCloud::UploadColorIfDirty() {
+    if (!color_dirty_) {
+        return;
     }
-    glEnd();
+
+    const std::vector<Vec4f>* colors = &color_data_pcl_;
+    std::vector<Vec4f> custom_expanded;
+
+    switch (use_color_) {
+        case UseColor::PCL_COLOR:
+            colors = &color_data_pcl_;
+            break;
+        case UseColor::INTENSITY_COLOR:
+            colors = &color_data_intensity_;
+            break;
+        case UseColor::HEIGHT_COLOR:
+            colors = &color_data_height_;
+            break;
+        case UseColor::GRAY_COLOR:
+            colors = &color_data_gray_;
+            break;
+        case UseColor::CUSTOM_COLOR:
+            custom_expanded.assign(xyz_data_.size(), custom_color_);
+            colors = &custom_expanded;
+            break;
+    }
+
+    vbo_color_.Reinitialise(pangolin::GlArrayBuffer, static_cast<GLuint>(colors->size()), GL_FLOAT, 4,
+                            GL_DYNAMIC_DRAW);
+    if (!colors->empty()) {
+        vbo_color_.Upload(*colors);
+    }
+    color_dirty_ = false;
+}
+
+void UiCloud::Render(const Eigen::Matrix4f& mvp) {
+    if (xyz_data_.empty()) {
+        return;
+    }
+
+    UploadColorIfDirty();
+    // ui::opacity每帧都可能被菜单滑块改变，所以每次Render都要重新传，不能只在颜色脏的时候传一次
+    GlColoredShader::Instance().DrawVarying(mvp, vbo_pos_, vbo_color_, xyz_data_.size(), GL_POINTS, point_size_,
+                                            ui::opacity);
 }
 
 void UiCloud::BuildIntensityTable() {
@@ -89,6 +120,9 @@ void UiCloud::BuildIntensityTable() {
     }
 }
 
-void UiCloud::SetRenderColor(UiCloud::UseColor use_color) { use_color_ = use_color; }
+void UiCloud::SetRenderColor(UiCloud::UseColor use_color) {
+    use_color_ = use_color;
+    color_dirty_ = true;
+}
 
 }  // namespace lightning::ui

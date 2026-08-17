@@ -1,12 +1,10 @@
-#include <pangolin/display/default_font.h>
-#include <iomanip>
-#include <sstream>
 #include <string>
 #include <thread>
 
 #include "common/options.h"
 #include "common/std_types.h"
 #include "core/lightning_math.hpp"
+#include "ui/gl_colored_shader.h"
 #include "ui/pangolin_window_impl.h"
 
 namespace lightning::ui {
@@ -17,9 +15,6 @@ bool PangolinWindowImpl::Init() {
 
     // 3D mouse handler requires depth testing to be enabled
     glEnable(GL_DEPTH_TEST);
-
-    // opengl buffer
-    AllocateBuffer();
 
     // unset the current context from the main thread
     pangolin::GetBoundWindow()->RemoveCurrent();
@@ -66,10 +61,7 @@ void PangolinWindowImpl::Reset(const std::vector<Keyframe::Ptr> &keyframes) {
     newest_backend_pose_ = keyframes.back()->GetOptPose();
 }
 
-bool PangolinWindowImpl::DeInit() {
-    ReleaseBuffer();
-    return true;
-}
+bool PangolinWindowImpl::DeInit() { return true; }
 
 bool PangolinWindowImpl::UpdateGlobalMap() {
     if (!cloud_global_need_update_.load()) {
@@ -189,11 +181,6 @@ bool PangolinWindowImpl::UpdateState() {
     newest_frontend_pose_ = pose_;
     traj_newest_state_->AddPt(newest_frontend_pose_);
 
-    std::ostringstream ss;
-    ss << std::fixed << std::setprecision(4) << "ba: [" << bias_acc_(0) << ", " << bias_acc_(1) << ", " << bias_acc_(2)
-       << "]";
-    gltext_label_state_ = pangolin::default_font().Text(ss.str());
-
     kf_result_need_update_.store(false);
     return false;
 }
@@ -201,37 +188,37 @@ bool PangolinWindowImpl::UpdateState() {
 void PangolinWindowImpl::DrawAll() {
     /// 地图
     for (const auto &pc : cloud_map_ui_) {
-        pc.second->Render();
+        pc.second->Render(current_mvp_);
     }
 
     /// 动态地图
     for (const auto &pc : cloud_dyn_ui_) {
-        pc.second->Render();
+        pc.second->Render(current_mvp_);
     }
 
     /// 缓存的scans
     for (const auto &s : scans_) {
-        s->Render();
+        s->Render(current_mvp_);
     }
 
-    current_scan_ui_->Render();
+    current_scan_ui_->Render(current_mvp_);
 
     if (draw_frontend_traj_) {
-        traj_newest_state_->Render();
+        traj_newest_state_->Render(current_mvp_);
         // 车
         frontend_car_.SetPose(newest_frontend_pose_);  // 车在current pose上
-        frontend_car_.Render();
+        frontend_car_.Render(current_mvp_);
     }
 
     if (draw_backend_traj_) {
-        traj_scans_->Render();
+        traj_scans_->Render(current_mvp_);
         // 车
         backend_car_.SetPose(newest_backend_pose_);
-        backend_car_.Render();
+        backend_car_.Render(current_mvp_);
     }
 
     // pred_car_.SetPose(predicted_pose_);
-    // pred_car_.Render();
+    // pred_car_.Render(current_mvp_);
 
     // 关键帧
     {
@@ -239,24 +226,22 @@ void PangolinWindowImpl::DrawAll() {
 
         if (all_keyframes_.size() > 1) {
             /// 闭环后的轨迹
-            glLineWidth(5.0);
-            glBegin(GL_LINE_STRIP);
-            glColor3f(0.5, 0.0, 0.5);
-
-            for (int i = 0; i < all_keyframes_.size() - 1; ++i) {
-                auto p1 = all_keyframes_[i]->GetOptPose().translation();
-                auto p2 = all_keyframes_[i + 1]->GetOptPose().translation();
-
-                glVertex3f(p1[0], p1[1], p1[2]);
-                glVertex3f(p2[0], p2[1], p2[2]);
+            /// 每帧都要重新从all_keyframes_取位姿再传显存：闭环优化可能就地更新已有关键帧的pose，
+            /// 不一定伴随新增关键帧，所以不能靠"是否有新关键帧"这种脏标记来判断是否需要重新上传。
+            std::vector<Vec3f> loop_line_pts;
+            loop_line_pts.reserve(all_keyframes_.size());
+            for (const auto &kf : all_keyframes_) {
+                loop_line_pts.emplace_back(kf->GetOptPose().translation().cast<float>());
             }
 
-            glEnd();
+            loop_line_vbo_.Reinitialise(pangolin::GlArrayBuffer, static_cast<GLuint>(loop_line_pts.size()), GL_FLOAT,
+                                        3, GL_DYNAMIC_DRAW);
+            loop_line_vbo_.Upload(loop_line_pts);
+
+            ui::GlColoredShader::Instance().DrawUniform(current_mvp_, loop_line_vbo_, loop_line_pts.size(),
+                                                        GL_LINE_STRIP, Vec4f(0.5f, 0.0f, 0.5f, 1.0f), 5.0f);
         }
     }
-
-    // 文字
-    RenderLabels();
 }
 
 void PangolinWindowImpl::RenderClouds() {
@@ -271,40 +256,6 @@ void PangolinWindowImpl::RenderClouds() {
     // 绘制
     pangolin::Display(dis_3d_main_name_).Activate(s_cam_main_);
     DrawAll();
-}
-
-void PangolinWindowImpl::RenderLabels() {
-    // 定位状态标识，显示在3D窗口中
-    auto &d_cam3d_main = pangolin::Display(dis_3d_main_name_);
-    d_cam3d_main.Activate(s_cam_main_);
-    const auto cur_width = d_cam3d_main.v.w;
-    const auto cur_height = d_cam3d_main.v.h;
-
-    GLint view[4];
-    glGetIntegerv(GL_VIEWPORT, view);
-
-    glMatrixMode(GL_PROJECTION);
-    glPushMatrix();
-    glLoadIdentity();
-    glOrtho(0, cur_width, 0, cur_height, -1, 1);
-
-    glMatrixMode(GL_MODELVIEW);
-    glPushMatrix();
-    glLoadIdentity();
-
-    glTranslatef(5, cur_height - 1.5 * gltext_label_global_.Height(), 1.0);
-    glColor3ub(127, 127, 127);
-    gltext_label_global_.Draw();
-
-    glTranslatef(0.0f, -1.5f * gltext_label_global_.Height(), 0.0f);
-    glColor3ub(180, 220, 180);
-    gltext_label_state_.Draw();
-
-    // Restore modelview / project matrices
-    glMatrixMode(GL_PROJECTION);
-    glPopMatrix();
-    glMatrixMode(GL_MODELVIEW);
-    glPopMatrix();
 }
 
 void PangolinWindowImpl::CreateDisplayLayout() {
@@ -411,16 +362,19 @@ void PangolinWindowImpl::Render() {
         debug::play_speed = menu_play_speed;
         ui::opacity = menu_intensity;
 
-        // Render pointcloud
-        RenderClouds();
-
-        /// 处理相机跟随问题
+        /// 处理相机跟随问题：手动叠加跟随偏移，不依赖只在legacy矩阵栈里生效的OpenGlRenderState::Follow()
+        /// （原理同Follow()：把当前跟踪目标的世界系XY平移的逆，叠加在用户鼠标操作出的base modelview之上，
+        /// 让目标始终位于视野中心；Z置0、旋转为单位阵，对应原来"只平移不跟随朝向"的效果）
+        Eigen::Matrix4d modelview = s_cam_main_.GetModelViewMatrix();
         if (following_loc_) {
             Eigen::Vector3d translation = newest_frontend_pose_.translation();
-            Sophus::SE3d newest_frontend_pose_new(Eigen::Quaterniond::Identity(),
-                                                  Eigen::Vector3d(translation.x(), translation.y(), 0.0));
-            s_cam_main_.Follow(newest_frontend_pose_new.matrix());
+            Sophus::SE3d T_wc_now(Eigen::Quaterniond::Identity(), Eigen::Vector3d(translation.x(), translation.y(), 0.0));
+            modelview = modelview * T_wc_now.matrix().inverse();
         }
+        current_mvp_ = (Eigen::Matrix4d(s_cam_main_.GetProjectionMatrix()) * modelview).cast<float>();
+
+        // Render pointcloud
+        RenderClouds();
 
         // Swap frames and Process Events
         // 完成当前帧的渲染并处理与窗口交互相关的事件
@@ -435,17 +389,5 @@ void PangolinWindowImpl::Render() {
 }
 
 std::string PangolinWindowImpl::GetWindowName() const { return win_name_; }
-
-void PangolinWindowImpl::AllocateBuffer() {
-    std::string global_text(
-        "Welcome to SAD.UI. Open source code: https://github.com/gaoxiang12/slam_in_autonomous_driving. All right "
-        "reserved.\n"
-        "Red: newest IMU pose, yellow: lidar scan pose");
-    auto &font = pangolin::default_font();
-    gltext_label_global_ = font.Text(global_text);
-    gltext_label_state_ = font.Text("ba: [0.0000, 0.0000, 0.0000]");
-}
-
-void PangolinWindowImpl::ReleaseBuffer() {}
 
 }  // namespace lightning::ui

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pangolin/gl/gl.h>
+
 #include "common/eigen_types.h"
 
 namespace lightning::ui {
@@ -13,13 +15,16 @@ class UiCar {
     void SetPose(const SE3& pose);
 
     /// 渲染小车
-    void Render();
+    void Render(const Eigen::Matrix4f& mvp);
 
    private:
     Vec3f color_;
     std::vector<Vec3f> pts_;
 
     static std::vector<Vec3f> car_vertices_;  // 小车的顶点
+
+    pangolin::GlBuffer vbo_;
+    bool vbo_dirty_ = true;
 };
 
 }  // namespace lightning::ui

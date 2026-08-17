@@ -1,5 +1,5 @@
 #include "ui/ui_car.h"
-#include <GL/gl.h>
+#include "ui/gl_colored_shader.h"
 
 namespace lightning::ui {
 
@@ -22,25 +22,24 @@ void UiCar::SetPose(const SE3& pose) {
     for (auto& pt : pts_) {
         pt = pose_f * pt;
     }
+
+    vbo_dirty_ = true;
 }
 
-void UiCar::Render() {
-    glLineWidth(5.0);
-    glBegin(GL_LINES);
+void UiCar::Render(const Eigen::Matrix4f& mvp) {
+    if (pts_.empty()) {
+        return;
+    }
 
-    /// x -红, y-绿 z-蓝
-    glColor3f(color_[0], color_[1], color_[2]);
-    glVertex3f(pts_[0][0], pts_[0][1], pts_[0][2]);
-    glVertex3f(pts_[1][0], pts_[1][1], pts_[1][2]);
+    if (vbo_dirty_) {
+        vbo_.Reinitialise(pangolin::GlArrayBuffer, static_cast<GLuint>(pts_.size()), GL_FLOAT, 3, GL_DYNAMIC_DRAW);
+        vbo_.Upload(pts_);
+        vbo_dirty_ = false;
+    }
 
-    // glColor3f(0.0, 1.0, 0.0);
-    glVertex3f(pts_[2][0], pts_[2][1], pts_[2][2]);
-    glVertex3f(pts_[3][0], pts_[3][1], pts_[3][2]);
-
-    // glColor3f(0.0, 0.0, 1.0);
-    glVertex3f(pts_[4][0], pts_[4][1], pts_[4][2]);
-    glVertex3f(pts_[5][0], pts_[5][1], pts_[5][2]);
-    glEnd();
+    /// x -红, y-绿 z-蓝 （目前三段共用一个颜色，见color_）
+    GlColoredShader::Instance().DrawUniform(mvp, vbo_, pts_.size(), GL_LINES, Vec4f(color_[0], color_[1], color_[2], 1.0f),
+                                            5.0f);
 }
 
 }  // namespace lightning::ui

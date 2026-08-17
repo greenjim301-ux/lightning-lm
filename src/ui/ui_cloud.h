@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pangolin/gl/gl.h>
+
 #include "common/eigen_types.h"
 #include "common/point_def.h"
 
@@ -29,7 +31,8 @@ class UiCloud {
     void SetCloud(CloudPtr cloud, const SE3& pose);
 
     /// 渲染这个点云
-    void Render();
+    /// @param mvp 调用方算好的投影*视图矩阵（含相机跟随偏移，见PangolinWindowImpl::current_mvp_）
+    void Render(const Eigen::Matrix4f& mvp);
 
     /// 指定内置颜色
     void SetRenderColor(UseColor use_color);
@@ -46,6 +49,10 @@ class UiCloud {
         return intensity_color_table_pcl_[index];
     }
 
+    /// 根据use_color_，把对应的color_data_*重新上传到vbo_color_
+    /// （惰性：只在SetCloud/SetRenderColor/SetCustomColor之后、下次Render()时才会真正重新上传一次）
+    void UploadColorIfDirty();
+
     UseColor use_color_ = UseColor::PCL_COLOR;
     Vec4f custom_color_ = Vec4f::Zero();
 
@@ -60,6 +67,11 @@ class UiCloud {
     void BuildIntensityTable();
     // 颜色映射表
     static std::vector<Vec4f> intensity_color_table_pcl_;
+
+    // GLES3/WebGL安全绘制所需的显存数据，见gl_colored_shader.h
+    pangolin::GlBuffer vbo_pos_;
+    pangolin::GlBuffer vbo_color_;
+    bool color_dirty_ = true;
 };
 
 }  // namespace lightning::ui

@@ -15,12 +15,13 @@ class UiTrajectory {
     void AddPt(const SE3& pose);
 
     /// 渲染此轨迹
-    void Render();
+    void Render(const Eigen::Matrix4f& mvp);
 
     void Clear() {
         pos_.clear();
         pos_.reserve(max_size_);
         vbo_.Free();
+        vbo_dirty_ = true;
     }
 
     Vec3f At(const uint64_t idx) const { return pos_.at(idx); }
@@ -30,6 +31,7 @@ class UiTrajectory {
     std::vector<Eigen::Vector3f> pos_;                 // 轨迹记录数据
     Eigen::Vector3f color_ = Eigen::Vector3f::Zero();  // 轨迹颜色显示
     pangolin::GlBuffer vbo_;                           // 显存顶点信息
+    bool vbo_dirty_ = true;
 };
 
 }  // namespace lightning::ui

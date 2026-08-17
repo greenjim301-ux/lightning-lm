@@ -98,10 +98,6 @@ class PangolinWindowImpl {
 
     //////////////////////////////// 以下和render相关 ///////////////////////////
    private:
-    /// 创建OpenGL Buffers
-    void AllocateBuffer();
-    void ReleaseBuffer();
-
     void CreateDisplayLayout();
 
     void DrawAll();  // 作图：画定位窗口
@@ -112,8 +108,6 @@ class PangolinWindowImpl {
     bool UpdateDynamicMap();
     bool UpdateState();
     bool UpdateCurrentScan();
-
-    void RenderLabels();
 
    private:
     /// 窗口layout相关
@@ -134,12 +128,14 @@ class PangolinWindowImpl {
     bool draw_frontend_traj_ = true;  // 可视化前端轨迹
     bool draw_backend_traj_ = true;   // 可视化后端轨迹
 
-    // text
-    pangolin::GlText gltext_label_global_;
-    pangolin::GlText gltext_label_state_;
-
     // camera
     pangolin::OpenGlRenderState s_cam_main_;
+
+    /// 每帧在DrawAll()之前算好的投影*视图矩阵（含跟随偏移），供所有shader绘制调用共用。
+    /// @note 不能用s_cam_main_.GetProjectionModelViewMatrix()：Pangolin的OpenGlRenderState::Follow()
+    ///       只在legacy矩阵栈的Apply()里才会叠加跟随偏移(modelview*T_cw)，GetModelViewMatrix()本身不含它，
+    ///       shader绘制不走矩阵栈，所以要自己在这里把跟随偏移叠加进去。
+    Eigen::Matrix4f current_mvp_ = Eigen::Matrix4f::Identity();
 
     /// cloud rendering
     ui::UiCar backend_car_{Vec3f(0.2, 0.2, 0.8)};   // 白色车
@@ -155,6 +151,9 @@ class PangolinWindowImpl {
     // trajectory
     std::shared_ptr<ui::UiTrajectory> traj_scans_ = nullptr;         // 激光扫描的轨迹
     std::shared_ptr<ui::UiTrajectory> traj_newest_state_ = nullptr;  // 最新state的轨迹
+
+    // 闭环后的轨迹（紫色，连接all_keyframes_的优化后位置），GLES3/WebGL安全绘制用
+    pangolin::GlBuffer loop_line_vbo_;
 
     // 滤波器状态相关 Data logger object
     pangolin::DataLog log_vel_;           // odom frame下的速度
