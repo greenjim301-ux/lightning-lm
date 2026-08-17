@@ -2,7 +2,8 @@
 
 #include <map>
 #include <memory>
-#include <queue>
+#include <mutex>
+#include <vector>
 
 #include "common/eigen_types.h"
 #include "common/keyframe.h"
@@ -10,18 +11,16 @@
 #include "common/nav_state.h"
 #include "common/point_def.h"
 
-#ifdef LIGHTNING_ENABLE_RERUN
 namespace rerun {
 class RecordingStream;
 }
-#endif
 
 namespace lightning::ui {
 
-class PangolinWindowImpl;
-
 /**
- * @note 此类本身不直接涉及任何opengl和pangolin操作，应当放到PangolinWindowImpl中
+ * @note 基于 rerun_cpp 的可视化后端：数据通过 gRPC 推送给 rerun 的 web viewer，
+ *       在浏览器中渲染（见 @rerun-io/web-viewer-react），取代了原先的 Pangolin/OpenGL 原生窗口。
+ *       类名/公开接口保持不变，以避免改动所有调用方。
  */
 class PangolinWindow {
    public:
@@ -30,9 +29,7 @@ class PangolinWindow {
     PangolinWindow();
     ~PangolinWindow();
 
-    /// @brief 初始化窗口，后台启动render线程。
-    /// @note 与opengl/pangolin无关的初始化，尽量放到此函数体中;
-    ///       opengl/pangolin相关的内容，尽量放到PangolinWindowImpl::Init中。
+    /// @brief 启动 rerun gRPC server（供web viewer前端连接），并写入静态坐标系设定
     bool Init();
 
     void Reset(const std::vector<Keyframe::Ptr>& keyframes);
@@ -56,28 +53,28 @@ class PangolinWindow {
 
     void UpdateKF(std::shared_ptr<Keyframe> kf);
 
-    /// 等待显示线程结束，并释放资源
+    /// 空操作：rerun server 持续运行，没有可被用户关闭的窗口需要等待
     void Quit();
 
-    /// 用户是否已经退出UI
+    /// 恒为false，理由同Quit()
     bool ShouldQuit();
 
-    /// 设置IMU到雷达的外参
+    /// 设置IMU到雷达的外参（当前渲染逻辑未使用，仅保留接口）
     void SetTImuLidar(const SE3& T_imu_lidar);
 
-    /// 设置需要保留多少个扫描数据
+    /// 设置Reset()时保留最近多少个关键帧的点云（避免一次性推送过多历史数据）
     void SetCurrentScanSize(int current_scan_size);
 
    private:
-    std::shared_ptr<PangolinWindowImpl> impl_ = nullptr;
+    /// UpdateNavState/UpdateRecentPose 共用：更新前端车辆位姿与红色轨迹
+    void LogFrontendPose(const SE3& pose);
 
-#ifdef LIGHTNING_ENABLE_RERUN
-    /// 将各 Update* 调用同时投递给 rerun，供网页端 web viewer 实时查看
     /// @note 前向声明以避免把 rerun.hpp 传递给所有包含本头文件的调用方
     std::unique_ptr<rerun::RecordingStream> rerun_stream_;
 
-    /// UpdateNavState/UpdateRecentPose 共用：更新前端车辆位姿与红色轨迹
-    void LogFrontendPose(const SE3& pose);
-#endif
+    int max_size_of_current_scan_ = 200;
+
+    std::mutex mtx_keyframes_;
+    std::vector<std::shared_ptr<Keyframe>> all_keyframes_;  // 用于重绘闭环轨迹
 };
 }  // namespace lightning::ui

@@ -4,10 +4,7 @@
 
 #include "ui/pangolin_window.h"
 
-#include <pangolin/display/display.h>
-#include <pangolin/display/view.h>
-#include <pangolin/gl/gldraw.h>
-#include <pangolin/handler/handler.h>
+#include <unistd.h>  // sleep() -- previously pulled in transitively via the now-removed pangolin/ includes
 
 int main(int argc, char** argv) {
     google::InitGoogleLogging(argv[0]);

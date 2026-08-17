@@ -19,10 +19,8 @@ namespace lightning {
 namespace debug {
 
 /// debug and save
-extern bool flg_exit;     // ctrl-c中断
-extern bool flg_pause;    // 暂停
-extern bool flg_next;     // 暂停后，放行单个消息(单步调试)
-extern float play_speed;  // 播放速度
+extern bool flg_exit;   // ctrl-c中断
+extern bool flg_pause;  // 暂停
 
 inline void SigHandle(int sig) {
     debug::flg_exit = true;
@@ -78,7 +76,6 @@ extern double pgo_smooth_factor;          // PGO平滑因子
 // ui
 namespace ui {
 extern int pgo_res_rows;  // pgo发送滑窗数据给ui的矩阵的行数
-extern float opacity;     // 点云透明度
 }  // namespace ui
 
 // lidar_loc

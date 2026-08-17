@@ -11,8 +11,6 @@ namespace debug {
 /// debug and save
 bool flg_exit = false;   // ctrl-c中断
 bool flg_pause = false;  // 暂停
-bool flg_next = false;   // 暂停后，放行单个消息(单步调试)
-float play_speed = 10.0;
 
 }  // namespace debug
 
@@ -42,7 +40,6 @@ Vec3d map_origin = Vec3d::Zero();  // 地图原点
 // ui
 namespace ui {
 int pgo_res_rows = 16;  // pgo发送滑窗数据给ui的矩阵的行数
-float opacity = 0.2;    // 点云透明度
 }  // namespace ui
 
 // pgo

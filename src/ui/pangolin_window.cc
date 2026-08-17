@@ -1,15 +1,14 @@
-#include "ui/pangolin_window_impl.h"
+#include "ui/pangolin_window.h"
 
-#ifdef LIGHTNING_ENABLE_RERUN
 #include <rerun.hpp>
 
 #include <algorithm>
 #include <glog/logging.h>
-#endif
+
+#include "core/lightning_math.hpp"
 
 namespace lightning::ui {
 
-#ifdef LIGHTNING_ENABLE_RERUN
 namespace {
 
 rerun::Position3D ToRerunPos(const Vec3d& p) { return {float(p.x()), float(p.y()), float(p.z())}; }
@@ -17,7 +16,7 @@ rerun::Position3D ToRerunPos(const PointType& p) { return {p.x, p.y, p.z}; }
 /// LineStrip3D wants Collection<Vec3D>, not Collection<Position3D> — see components/line_strip3d.hpp
 rerun::Vec3D ToRerunVec3D(const Vec3d& p) { return {float(p.x()), float(p.y()), float(p.z())}; }
 
-/// 高度到颜色的简易映射，近似复刻 UiCloud::HEIGHT_COLOR 的视觉效果（见 ui_cloud.cc）
+/// 高度到颜色的简易映射，近似复刻原 UiCloud::HEIGHT_COLOR 的视觉效果
 rerun::Color HeightToColor(float z) {
     float t = std::clamp(z / 5.0f + 0.5f, 0.0f, 1.0f);
     return rerun::Color(static_cast<uint8_t>(255 * t), static_cast<uint8_t>(255 * (1.0f - std::abs(t - 0.5f) * 2.0f)),
@@ -33,73 +32,70 @@ rerun::Transform3D ToRerunTransform(const SE3& pose) {
 }
 
 }  // namespace
-#endif
 
-PangolinWindow::PangolinWindow() {
-    impl_ = std::make_shared<PangolinWindowImpl>();
+PangolinWindow::PangolinWindow() { rerun_stream_ = std::make_unique<rerun::RecordingStream>("lightning_lm"); }
 
-#ifdef LIGHTNING_ENABLE_RERUN
-    rerun_stream_ = std::make_unique<rerun::RecordingStream>("lightning_lm");
-    // React app connects via `rrd="rerun+http://<host>:9876/proxy"` (see @rerun-io/web-viewer-react integration).
+PangolinWindow::~PangolinWindow() { Quit(); }
+
+bool PangolinWindow::Init() {
+    // React app connects via `rrd="rerun+http://<host>:9876/proxy"` (@rerun-io/web-viewer-react).
     // Tighten cors_allow_origins to the actual frontend origin before shipping this beyond local dev.
     auto serve_result = rerun_stream_->serve_grpc("0.0.0.0", 9876, "1GiB", rerun::PlaybackBehavior::OldestFirst,
                                                   {"*"});
     if (serve_result.is_err()) {
-        LOG(WARNING) << "rerun serve_grpc failed, web viewer will not be available: "
-                    << serve_result.error.description;
+        LOG(ERROR) << "rerun serve_grpc failed, web viewer will not be available: " << serve_result.error.description;
+        return false;
     }
+
     rerun_stream_->log_static("world", rerun::ViewCoordinates::RFU);  // X=Right, Y=Forward, Z=Up
-#endif
-}
-PangolinWindow::~PangolinWindow() { Quit(); }
-
-bool PangolinWindow::Init() {
-    impl_->cloud_global_need_update_.store(false);
-    impl_->kf_result_need_update_.store(false);
-    impl_->lidarloc_need_update_.store(false);
-    impl_->current_scan_need_update_.store(false);
-
-    bool inited = impl_->Init();
-    // 创建渲染线程
-    if (inited) {
-        impl_->render_thread_ = std::thread([this]() { impl_->Render(); });
-    }
-    return inited;
+    return true;
 }
 
 void PangolinWindow::Reset(const std::vector<Keyframe::Ptr>& keyframes) {
-    impl_->Reset(keyframes);
+    if (keyframes.empty()) {
+        return;
+    }
 
-#ifdef LIGHTNING_ENABLE_RERUN
-    // 按关键帧原始顺序重放，使 rerun 播放条可以像 Pangolin 的 Step/Play speed 菜单一样逐帧回放
+    // 按关键帧原始顺序重放，使 rerun 播放条可以像回放录像一样逐帧查看建图过程
     std::vector<rerun::Vec3D> loop_strip;
     loop_strip.reserve(keyframes.size());
     for (size_t i = 0; i < keyframes.size(); ++i) {
         rerun_stream_->set_time_sequence("keyframe", static_cast<int64_t>(i));
-        const Vec3d t = keyframes[i]->GetOptPose().translation();
-        loop_strip.emplace_back(ToRerunVec3D(t));
-        rerun_stream_->log("world/backend/trajectory", rerun::Points3D({ToRerunPos(t)}));
+        const SE3 pose = keyframes[i]->GetOptPose();
+        loop_strip.emplace_back(ToRerunVec3D(pose.translation()));
+        rerun_stream_->log("world/backend/trajectory", rerun::Points3D({ToRerunPos(pose.translation())}));
     }
     rerun_stream_->log("world/loop/trajectory",
                        rerun::LineStrips3D({loop_strip}).with_colors(rerun::Color(128, 0, 128)));
-#endif
-}
 
-void PangolinWindow::Quit() {
-    if (impl_->render_thread_.joinable()) {
-        impl_->exit_flag_.store(true);
-        impl_->render_thread_.join();
+    // 仅重放最近 max_size_of_current_scan_ 个关键帧的点云，避免一次性推送过多历史点云
+    const size_t begin = keyframes.size() > static_cast<size_t>(max_size_of_current_scan_)
+                             ? keyframes.size() - static_cast<size_t>(max_size_of_current_scan_)
+                             : 0;
+    for (size_t i = begin; i < keyframes.size(); ++i) {
+        const auto& kf = keyframes[i];
+        rerun_stream_->set_time_sequence("keyframe", static_cast<int64_t>(i));
+
+        CloudPtr voxeled = math::VoxelGrid(std::make_shared<PointCloudType>(*kf->GetCloud()), 0.5);
+        std::vector<rerun::Position3D> pts;
+        std::vector<rerun::Color> colors;
+        pts.reserve(voxeled->size());
+        colors.reserve(voxeled->size());
+        for (const auto& p : *voxeled) {
+            pts.emplace_back(ToRerunPos(p));
+            colors.emplace_back(HeightToColor(p.z));
+        }
+
+        rerun_stream_->log("world/scan/current", ToRerunTransform(kf->GetOptPose()));
+        rerun_stream_->log("world/scan/current/points", rerun::Points3D(pts).with_colors(colors));
     }
-    impl_->DeInit();
+
+    std::lock_guard<std::mutex> lock(mtx_keyframes_);
+    all_keyframes_.assign(keyframes.begin(), keyframes.end());
 }
 
 void PangolinWindow::UpdatePointCloudGlobal(const std::map<int, CloudPtr>& cloud) {
-    std::lock_guard<std::mutex> lock(impl_->mtx_map_cloud_);
-    impl_->cloud_global_map_ = cloud;
-    impl_->cloud_global_need_update_.store(true);
-
-#ifdef LIGHTNING_ENABLE_RERUN
-    // 全局地图点云已经是world系坐标（见 pangolin_window_impl.cc:86 SetCloud(cp.second, SE3())），无需再乘pose
+    // 全局地图点云已经是world系坐标，无需再乘pose
     for (const auto& [submap_id, pc] : cloud) {
         std::vector<rerun::Position3D> pts;
         pts.reserve(pc->size());
@@ -107,30 +103,9 @@ void PangolinWindow::UpdatePointCloudGlobal(const std::map<int, CloudPtr>& cloud
         rerun_stream_->log("world/map/" + std::to_string(submap_id),
                            rerun::Points3D(pts).with_colors(rerun::Color(150, 150, 150)));
     }
-#endif
 }
 
 void PangolinWindow::UpdatePointCloudDynamic(const std::map<int, CloudPtr>& cloud) {
-    std::unique_lock<std::mutex> lock(impl_->mtx_map_cloud_);
-    impl_->cloud_dynamic_map_.clear();  // need deep copy
-
-    for (auto& cp : cloud) {
-        CloudPtr c(new PointCloudType());
-        *c = *cp.second;
-        impl_->cloud_dynamic_map_.emplace(cp.first, c);
-    }
-
-    for (auto iter = impl_->cloud_dynamic_map_.begin(); iter != impl_->cloud_dynamic_map_.end();) {
-        if (cloud.find(iter->first) == cloud.end()) {
-            iter = impl_->cloud_dynamic_map_.erase(iter);
-        } else {
-            iter++;
-        }
-    }
-
-    impl_->cloud_dynamic_need_update_.store(true);
-
-#ifdef LIGHTNING_ENABLE_RERUN
     for (const auto& [submap_id, pc] : cloud) {
         std::vector<rerun::Position3D> pts;
         pts.reserve(pc->size());
@@ -138,21 +113,9 @@ void PangolinWindow::UpdatePointCloudDynamic(const std::map<int, CloudPtr>& clou
         rerun_stream_->log("world/dynamic/" + std::to_string(submap_id),
                            rerun::Points3D(pts).with_colors(rerun::Color(0, 51, 255)));
     }
-#endif
 }
 
 void PangolinWindow::UpdateNavState(const NavState& state) {
-    std::unique_lock<std::mutex> lock_lio_res(impl_->mtx_nav_state_);
-
-    impl_->pose_ = state.GetPose();
-    impl_->vel_ = state.GetVel();
-    impl_->bias_acc_ = state.Getba();
-    impl_->bias_gyr_ = state.Getbg();
-    impl_->confidence_ = state.confidence_;
-
-    impl_->kf_result_need_update_.store(true);
-
-#ifdef LIGHTNING_ENABLE_RERUN
     rerun_stream_->log("state/vel/x", rerun::Scalars(state.GetVel().x()));
     rerun_stream_->log("state/vel/y", rerun::Scalars(state.GetVel().y()));
     rerun_stream_->log("state/vel/z", rerun::Scalars(state.GetVel().z()));
@@ -161,34 +124,16 @@ void PangolinWindow::UpdateNavState(const NavState& state) {
     rerun_stream_->log("state/bias_acc/z", rerun::Scalars(state.Getba().z()));
     rerun_stream_->log("state/confidence", rerun::Scalars(state.confidence_));
     LogFrontendPose(state.GetPose());
-#endif
 }
 
-void PangolinWindow::UpdateRecentPose(const SE3& pose) {
-    std::lock_guard<std::mutex> lock(impl_->mtx_nav_state_);
-    impl_->newest_frontend_pose_ = pose;
-
-#ifdef LIGHTNING_ENABLE_RERUN
-    LogFrontendPose(pose);
-#endif
-}
+void PangolinWindow::UpdateRecentPose(const SE3& pose) { LogFrontendPose(pose); }
 
 void PangolinWindow::UpdatePredictPose(const SE3& pose) {
-    UL lock(impl_->mtx_nav_state_);
-    impl_->predicted_pose_ = pose;
+    rerun_stream_->log("world/predicted/car", ToRerunTransform(pose));
 }
 
 void PangolinWindow::UpdateScan(CloudPtr cloud, const SE3& pose) {
-    std::lock_guard<std::mutex> lock(impl_->mtx_current_scan_);
-    std::lock_guard<std::mutex> lock2(impl_->mtx_nav_state_);
-
-    *impl_->current_scan_ = *cloud;  // need deep copy
-    impl_->current_scan_pose_ = pose;
-    impl_->current_scan_need_update_.store(true);
-
-#ifdef LIGHTNING_ENABLE_RERUN
-    // current_scan_ 是lidar系(lP)坐标，用Transform3D承载pose，让rerun viewer去做世界系变换
-    // （对应 UiCloud::SetCloud 中 pose_l * cloud->points[id] 的手动变换）
+    // cloud 是lidar系(lP)坐标，用Transform3D承载pose，让rerun viewer去做世界系变换
     rerun_stream_->log("world/scan/current", ToRerunTransform(pose));
 
     std::vector<rerun::Position3D> pts;
@@ -203,33 +148,30 @@ void PangolinWindow::UpdateScan(CloudPtr cloud, const SE3& pose) {
 
     rerun_stream_->log("world/backend/car", ToRerunTransform(pose));
     rerun_stream_->log("world/backend/trajectory", rerun::Points3D({ToRerunPos(pose.translation())}));
-#endif
 }
 
 void PangolinWindow::UpdateKF(std::shared_ptr<Keyframe> kf) {
-    UL lock(impl_->mtx_current_scan_);
-    impl_->all_keyframes_.emplace_back(kf);
+    std::lock_guard<std::mutex> lock(mtx_keyframes_);
+    all_keyframes_.emplace_back(kf);
 
-#ifdef LIGHTNING_ENABLE_RERUN
-    // 闭环轨迹（对应 pangolin_window_impl.cc DrawAll() 中 all_keyframes_ 连线的紫色轨迹）
+    // 闭环轨迹：连接所有关键帧优化后的位置
     std::vector<rerun::Vec3D> strip;
-    strip.reserve(impl_->all_keyframes_.size());
-    for (const auto& k : impl_->all_keyframes_) strip.emplace_back(ToRerunVec3D(k->GetOptPose().translation()));
+    strip.reserve(all_keyframes_.size());
+    for (const auto& k : all_keyframes_) strip.emplace_back(ToRerunVec3D(k->GetOptPose().translation()));
     rerun_stream_->log("world/loop/trajectory", rerun::LineStrips3D({strip}).with_colors(rerun::Color(128, 0, 128)));
-#endif
 }
 
-void PangolinWindow::SetCurrentScanSize(int current_scan_size) { impl_->max_size_of_current_scan_ = current_scan_size; }
+void PangolinWindow::Quit() {}
 
-void PangolinWindow::SetTImuLidar(const SE3& T_imu_lidar) { impl_->T_imu_lidar_ = T_imu_lidar; }
+bool PangolinWindow::ShouldQuit() { return false; }
 
-bool PangolinWindow::ShouldQuit() { return pangolin::ShouldQuit(); }
+void PangolinWindow::SetTImuLidar(const SE3& /*T_imu_lidar*/) {}
 
-#ifdef LIGHTNING_ENABLE_RERUN
+void PangolinWindow::SetCurrentScanSize(int current_scan_size) { max_size_of_current_scan_ = current_scan_size; }
+
 void PangolinWindow::LogFrontendPose(const SE3& pose) {
     rerun_stream_->log("world/frontend/car", ToRerunTransform(pose));
     rerun_stream_->log("world/frontend/trajectory", rerun::Points3D({ToRerunPos(pose.translation())}));
 }
-#endif
 
 }  // namespace lightning::ui
