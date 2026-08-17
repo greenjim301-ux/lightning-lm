@@ -3,6 +3,8 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
+#include <string>
 #include <vector>
 
 #include "common/eigen_types.h"
@@ -69,6 +71,13 @@ class PangolinWindow {
     /// UpdateNavState/UpdateRecentPose 共用：更新前端车辆位姿与红色轨迹
     void LogFrontendPose(const SE3& pose);
 
+    /// UpdatePointCloudGlobal/UpdatePointCloudDynamic 共用：静态点云地图作为log_static写入
+    /// （不受serve_grpc的server_memory_limit淘汰），因此子图被卸载时需要显式Clear，否则会永久残留。
+    /// @param entity_prefix 例如 "world/map/" 或 "world/dynamic/"
+    /// @param known_ids 该图层已知的子图id集合，函数会原地更新为cloud的id集合
+    void SyncStaticSubmapCloud(const std::string& entity_prefix, const std::map<int, CloudPtr>& cloud,
+                               std::set<int>& known_ids, uint8_t r, uint8_t g, uint8_t b);
+
     /// @note 前向声明以避免把 rerun.hpp 传递给所有包含本头文件的调用方
     std::unique_ptr<rerun::RecordingStream> rerun_stream_;
 
@@ -76,5 +85,8 @@ class PangolinWindow {
 
     std::mutex mtx_keyframes_;
     std::vector<std::shared_ptr<Keyframe>> all_keyframes_;  // 用于重绘闭环轨迹
+
+    std::set<int> global_map_submap_ids_;   // world/map/* 当前已知的子图id，用于检测被卸载的子图
+    std::set<int> dynamic_map_submap_ids_;  // world/dynamic/* 同上
 };
 }  // namespace lightning::ui

@@ -96,22 +96,38 @@ void PangolinWindow::Reset(const std::vector<Keyframe::Ptr>& keyframes) {
 
 void PangolinWindow::UpdatePointCloudGlobal(const std::map<int, CloudPtr>& cloud) {
     // 全局地图点云已经是world系坐标，无需再乘pose
-    for (const auto& [submap_id, pc] : cloud) {
-        std::vector<rerun::Position3D> pts;
-        pts.reserve(pc->size());
-        for (const auto& p : *pc) pts.emplace_back(ToRerunPos(p));
-        rerun_stream_->log("world/map/" + std::to_string(submap_id),
-                           rerun::Points3D(pts).with_colors(rerun::Color(150, 150, 150)));
-    }
+    SyncStaticSubmapCloud("world/map/", cloud, global_map_submap_ids_, 150, 150, 150);
 }
 
 void PangolinWindow::UpdatePointCloudDynamic(const std::map<int, CloudPtr>& cloud) {
+    SyncStaticSubmapCloud("world/dynamic/", cloud, dynamic_map_submap_ids_, 0, 51, 255);
+}
+
+void PangolinWindow::SyncStaticSubmapCloud(const std::string& entity_prefix, const std::map<int, CloudPtr>& cloud,
+                                           std::set<int>& known_ids, uint8_t r, uint8_t g, uint8_t b) {
+    // 用log_static而非log：地图不需要按时间轴回放（原Pangolin UI也只展示最新状态，不支持地图历史回溯），
+    // 而serve_grpc的server_memory_limit只会淘汰按时间戳记录的数据，static数据不受影响——
+    // 否则随着建图推进，地图越推越大，旧的（但仍在用的）子图点云会被当成"过期数据"淘汰掉。
+    //
+    // 代价是static数据永不淘汰，所以子图被卸载（不再出现在cloud里）时要显式Clear，
+    // 否则地图只会单调变大，正是原本想避免的内存增长问题——对应原PangolinWindowImpl中
+    // UpdateGlobalMap/UpdateDynamicMap里对cloud_map_ui_/cloud_dyn_ui_的erase逻辑。
     for (const auto& [submap_id, pc] : cloud) {
         std::vector<rerun::Position3D> pts;
         pts.reserve(pc->size());
         for (const auto& p : *pc) pts.emplace_back(ToRerunPos(p));
-        rerun_stream_->log("world/dynamic/" + std::to_string(submap_id),
-                           rerun::Points3D(pts).with_colors(rerun::Color(0, 51, 255)));
+        rerun_stream_->log_static(entity_prefix + std::to_string(submap_id),
+                                  rerun::Points3D(pts).with_colors(rerun::Color(r, g, b)));
+        known_ids.insert(submap_id);
+    }
+
+    for (auto it = known_ids.begin(); it != known_ids.end();) {
+        if (cloud.find(*it) == cloud.end()) {
+            rerun_stream_->log_static(entity_prefix + std::to_string(*it), rerun::Clear(false));
+            it = known_ids.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 
