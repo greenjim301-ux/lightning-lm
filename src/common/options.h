@@ -78,7 +78,8 @@ extern double pgo_smooth_factor;          // PGO平滑因子
 // ui
 namespace ui {
 extern int pgo_res_rows;  // pgo发送滑窗数据给ui的矩阵的行数
-extern float opacity;     // 点云透明度
+// 注意：点云透明度opacity声明在ui/ui_cloud.h（不在这里），因为这个头文件拉了rclcpp，
+// 而ui_cloud.cc要保持不依赖ROS2（方便以后给Emscripten/web交叉编译）
 }  // namespace ui
 
 // lidar_loc

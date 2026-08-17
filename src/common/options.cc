@@ -42,7 +42,6 @@ Vec3d map_origin = Vec3d::Zero();  // 地图原点
 // ui
 namespace ui {
 int pgo_res_rows = 16;  // pgo发送滑窗数据给ui的矩阵的行数
-float opacity = 0.2;    // 点云透明度
 }  // namespace ui
 
 // pgo

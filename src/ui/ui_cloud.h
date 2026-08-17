@@ -2,10 +2,25 @@
 
 #include <pangolin/gl/gl.h>
 
+#include <vector>
+
 #include "common/eigen_types.h"
-#include "common/point_def.h"
 
 namespace lightning::ui {
+
+/// UiCloud用的点，故意跟pcl::PointCloud完全解耦（不引入PCL），因为PCL拉Boost/FLANN一整套依赖，
+/// 没法给Emscripten/web交叉编译。把PCL点云转换成这个的责任在调用方——目前是pangolin_window_impl.cc
+/// 里的ToUiPoints()（原生端，PCL可用）；以后走wire protocol的话，会是从网络反序列化出来的代码。
+struct UiPoint {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float intensity = 0.0f;
+};
+
+/// 点云透明度，由菜单的intensity滑块控制。声明在这里而不是common/options.h：
+/// 那个头文件拉了rclcpp（ROS2），ui_cloud.cc要保持ROS2/PCL无关，方便以后给web交叉编译。
+extern float opacity;
 
 /// 在UI中使用的点云
 /// 固定不变的点云都可以用这个来渲染
@@ -21,14 +36,13 @@ class UiCloud {
     };
 
     UiCloud() {}
-    UiCloud(CloudPtr cloud);
 
     /**
-     * 从PCL点云来设置一个UI点云
-     * @param cloud             PCL 点云: lP, coordinates are in Lidar frame
+     * 设置UI点云
+     * @param points            点云: lP, coordinates are in Lidar frame
      * @param pose              点云位姿: Twi，
      */
-    void SetCloud(CloudPtr cloud, const SE3& pose);
+    void SetCloud(const std::vector<UiPoint>& points, const SE3& pose);
 
     /// 渲染这个点云
     /// @param mvp 调用方算好的投影*视图矩阵（含相机跟随偏移，见PangolinWindowImpl::current_mvp_）

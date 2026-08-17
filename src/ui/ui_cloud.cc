@@ -1,14 +1,11 @@
 #include "ui/ui_cloud.h"
-#include "common/options.h"
 #include "ui/gl_colored_shader.h"
-
-#include <numeric>
 
 namespace lightning::ui {
 
-std::vector<Vec4f> UiCloud::intensity_color_table_pcl_;
+float opacity = 0.2f;  // 点云透明度
 
-UiCloud::UiCloud(CloudPtr cloud) { SetCloud(cloud, SE3()); }
+std::vector<Vec4f> UiCloud::intensity_color_table_pcl_;
 
 void UiCloud::SetCustomColor(Vec4f custom_color) {
     custom_color_ = custom_color;
@@ -16,34 +13,29 @@ void UiCloud::SetCustomColor(Vec4f custom_color) {
 }
 
 // 把输入的点云映射为opengl可以渲染的点云
-void UiCloud::SetCloud(CloudPtr cloud, const SE3& pose) {
+void UiCloud::SetCloud(const std::vector<UiPoint>& points, const SE3& pose) {
     if (intensity_color_table_pcl_.empty()) {
         BuildIntensityTable();
     }
 
-    // assert(cloud != nullptr && cloud->empty() == false);
-    xyz_data_.resize(cloud->size());
-    color_data_pcl_.resize(cloud->size());
-    color_data_intensity_.resize(cloud->size());
-    color_data_height_.resize(cloud->size());
-    color_data_gray_.resize(cloud->size());
+    xyz_data_.resize(points.size());
+    color_data_pcl_.resize(points.size());
+    color_data_intensity_.resize(points.size());
+    color_data_height_.resize(points.size());
+    color_data_gray_.resize(points.size());
 
-    std::vector<int> idx(cloud->size());
-    std::iota(idx.begin(), idx.end(), 0);  // 使用从0开始递增的整数填充idx
-
-    SE3f pose_l = (pose).cast<float>();
+    SE3f pose_l = pose.cast<float>();
 
     // 遍历所有点
-    for (auto iter = idx.begin(); iter != idx.end(); iter++) {
-        const int& id = *iter;
-        const auto& pt = cloud->points[id];
+    for (size_t id = 0; id < points.size(); ++id) {
+        const auto& pt = points[id];
         // 计算点的世界坐标
-        auto pt_world = pose_l * cloud->points[id].getVector3fMap();
-        xyz_data_[id] = Vec3f(pt_world.x(), pt_world.y(), pt_world.z());
+        Vec3f pt_world = pose_l * Vec3f(pt.x, pt.y, pt.z);
+        xyz_data_[id] = pt_world;
         // 把intensity映射为颜色
         color_data_pcl_[id] = IntensityToRgbPCL(pt.intensity);
         color_data_gray_[id] = Vec4f(0.5, 0.5, 0.5, 1.0);
-        // 根据高度映射颜色
+        // 根据高度映射颜色（注意：跟原实现一致，用的是lidar系的局部z，不是变换后的世界系z）
         color_data_height_[id] = IntensityToRgbPCL(pt.z * 10);
         color_data_intensity_[id] =
             Vec4f(pt.intensity / 255.0 * 3.0, pt.intensity / 255.0 * 3.0, pt.intensity / 255.0 * 3.0, 1.0);

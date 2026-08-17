@@ -9,6 +9,19 @@
 
 namespace lightning::ui {
 
+namespace {
+// UiCloud不依赖PCL（方便以后给Emscripten/web交叉编译），所以PCL点云到UiPoint的转换放在这里——
+// 原生端调用点，PCL在这里是现成可用的。等做wire protocol时，wasm那一侧的等价物会是"从网络反序列化"。
+std::vector<UiPoint> ToUiPoints(const CloudPtr &cloud) {
+    std::vector<UiPoint> pts;
+    pts.reserve(cloud->size());
+    for (const auto &p : *cloud) {
+        pts.push_back(UiPoint{p.x, p.y, p.z, p.intensity});
+    }
+    return pts;
+}
+}  // namespace
+
 bool PangolinWindowImpl::Init() {
     // create a window and bind its context to the main thread
     pangolin::CreateWindowAndBind(win_name_, win_width_, win_height_);
@@ -52,7 +65,7 @@ void PangolinWindowImpl::Reset(const std::vector<Keyframe::Ptr> &keyframes) {
         const auto &keyframe = keyframes.at(i);
         current_scan_ui_ = std::make_shared<ui::UiCloud>();
         CloudPtr tmp_cloud = std::make_shared<PointCloudType>(*(keyframe->GetCloud()));
-        current_scan_ui_->SetCloud(math::VoxelGrid(tmp_cloud, 0.5), keyframe->GetOptPose());
+        current_scan_ui_->SetCloud(ToUiPoints(math::VoxelGrid(tmp_cloud, 0.5)), keyframe->GetOptPose());
         current_scan_ui_->SetRenderColor(ui::UiCloud::UseColor::HEIGHT_COLOR);
 
         scans_.emplace_back(current_scan_ui_);
@@ -75,7 +88,7 @@ bool PangolinWindowImpl::UpdateGlobalMap() {
         }
 
         std::shared_ptr<ui::UiCloud> ui_cloud(new ui::UiCloud);
-        ui_cloud->SetCloud(cp.second, SE3());
+        ui_cloud->SetCloud(ToUiPoints(cp.second), SE3());
         ui_cloud->SetRenderColor(ui::UiCloud::UseColor::GRAY_COLOR);
         cloud_map_ui_.emplace(cp.first, ui_cloud);
     }
@@ -105,7 +118,7 @@ bool PangolinWindowImpl::UpdateDynamicMap() {
             it->second.reset(new ui::UiCloud);
             // it->second->SetRenderColor(ui::UiCloud::UseColor::PCL_COLOR);
             it->second->SetCustomColor(Vec4f(0.0, 0.2, 1.0, 1.0));
-            it->second->SetCloud(cp.second, SE3());
+            it->second->SetCloud(ToUiPoints(cp.second), SE3());
             it->second->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
             continue;
         }
@@ -113,7 +126,7 @@ bool PangolinWindowImpl::UpdateDynamicMap() {
         /// 不存在则创建一个
         std::shared_ptr<ui::UiCloud> ui_cloud(new ui::UiCloud);
         ui_cloud->SetCustomColor(Vec4f(0.0, 0.2, 1.0, 1.0));
-        ui_cloud->SetCloud(cp.second, SE3());
+        ui_cloud->SetCloud(ToUiPoints(cp.second), SE3());
         ui_cloud->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
         // ui_cloud->SetRenderColor(ui::UiCloud::UseColor::PCL_COLOR);
         cloud_dyn_ui_.emplace(cp.first, ui_cloud);
@@ -140,7 +153,7 @@ bool PangolinWindowImpl::UpdateCurrentScan() {
         }
 
         current_scan_ui_ = std::make_shared<ui::UiCloud>();
-        current_scan_ui_->SetCloud(current_scan_, current_scan_pose_);
+        current_scan_ui_->SetCloud(ToUiPoints(current_scan_), current_scan_pose_);
         // current_scan_ui_->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
         current_scan_ui_->SetRenderColor(ui::UiCloud::UseColor::HEIGHT_COLOR);
         // current_scan_ui_->SetCustomColor(Vec4f(1.0, 1.0, 1.0, 1.0));
