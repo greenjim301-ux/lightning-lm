@@ -1,0 +1,37 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  color: #eee;
+}
+
+.lightning-ui-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.lightning-ui-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.lightning-ui-toolbar input {
+  font-family: monospace;
+  min-width: 20rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.lightning-ui-status--error {
+  color: #ff6b6b;
+}
+
+canvas#canvas {
+  background: #111;
+  border: 1px solid #333;
+  max-width: 100%;
+}

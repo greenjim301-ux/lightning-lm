@@ -3,15 +3,17 @@
 // the wasm-side mirror of what PangolinWindowImpl's Update* methods do natively.
 //
 // Not part of the native (colcon/ROS2) build: only meant to be compiled by an Emscripten
-// toolchain, which is why it isn't listed in src/CMakeLists.txt. See
-// ~/tools/lightning_ui_web_test for how it's built+verified today (no in-repo Emscripten
-// CMake target yet).
+// toolchain, which is why it isn't listed in src/CMakeLists.txt. Built as an ES6 module by
+// src/ui/wasm/CMakeLists.txt and consumed from web/ (React/Vite host page), which sets
+// window.LIGHTNING_WS_URL before instantiating the module.
 #include <emscripten.h>
 #include <emscripten/websocket.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "ui/pangolin_ui_scene.h"
@@ -184,13 +186,23 @@ void MainLoopStep() {
 
 }  // namespace
 
+// 宿主页面(web/)在加载本模块前把ws地址写到window.LIGHTNING_WS_URL上；不设置的话退回
+// localhost，方便脱离React页面单独调试。
+EM_JS(char*, GetWsUrlFromHostPage, (), {
+    var url = (typeof window !== 'undefined' && window.LIGHTNING_WS_URL) || 'ws://localhost:9877';
+    var len = lengthBytesUTF8(url) + 1;
+    var buf = _malloc(len);
+    stringToUTF8(url, buf, len);
+    return buf;
+});
+
 int main(int argc, char** argv) {
     static WasmUiClient client;
     g_client = &client;
 
-    // TODO: 从URL query string读server地址，目前先写死，够验证wire协议本身用的。
-    const char* ws_url = "ws://localhost:9877";
+    char* ws_url = GetWsUrlFromHostPage();
     client.Init(ws_url);
+    free(ws_url);
 
     emscripten_set_main_loop(MainLoopStep, 0, 1);
     return 0;

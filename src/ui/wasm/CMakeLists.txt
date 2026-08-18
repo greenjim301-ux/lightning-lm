@@ -4,15 +4,18 @@
 # find_package(ament_cmake/PCL/rclcpp/...)在Emscripten交叉编译下根本找不到，
 # 两边没法共用同一次cmake配置，只能各自独立配置。
 #
+# 产物是MODULARIZE+EXPORT_ES6的.mjs+.wasm(不是独立html)，供web/(React/Vite)动态import——
+# 详见web/README或src/ui/wasm_ui_client.cc顶部注释。宿主页面需要提供<canvas id="canvas">
+# (Pangolin的emscripten窗口后端写死找这个id，见pango_windowing/src/display_emscripten.cpp)
+# 并在import前设置window.LIGHTNING_WS_URL指向UiWireServer地址。
+#
 # 用法（需要先按reference-lightning-lm-build-env memory里记的方式，编译出wasm版Pangolin）：
 #   source <emsdk>/emsdk_env.sh
 #   mkdir -p build-wasm && cd build-wasm
 #   emcmake cmake ../src/ui/wasm -DPangolin_DIR=/path/to/pangolin-em-src/build-em \
 #       -DEigen3_DIR=/usr/share/eigen3/cmake   # 交叉编译时Eigen3不会自动去host路径找，得手动指
 #   emmake make
-#   python3 -m http.server 8765   # 在build-wasm目录里，然后浏览器打开lightning_ui_wasm_client.html
-#
-# UiWireServer(原生端)得单独跑起来，wasm_ui_client.cc目前把服务器地址写死成ws://localhost:9877。
+#   把生成的lightning_ui_wasm_client.mjs/.wasm拷到web/public/wasm/下(见web/README)。
 cmake_minimum_required(VERSION 3.16)
 project(lightning_ui_wasm_client)
 
@@ -47,8 +50,15 @@ add_executable(lightning_ui_wasm_client
 
 target_link_libraries(lightning_ui_wasm_client ${Pangolin_LIBRARIES})
 
-set_target_properties(lightning_ui_wasm_client PROPERTIES SUFFIX ".html")
+set_target_properties(lightning_ui_wasm_client PROPERTIES SUFFIX ".mjs")
 target_compile_options(lightning_ui_wasm_client PRIVATE -fexceptions)
 target_link_options(lightning_ui_wasm_client PRIVATE
         -sFULL_ES3=1 -sASYNCIFY=1 --bind -sALLOW_MEMORY_GROWTH=1
+        -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createLightningUiModule
+        -sENVIRONMENT=web
+        # emscripten_set_main_loop internally assigns Module['noExitRuntime'] = true to keep
+        # the runtime alive across the requestAnimationFrame loop; without exporting it,
+        # Emscripten replaces it with a getter-only guard stub and that assignment throws
+        # "Cannot set property noExitRuntime of #<Object> which has only a getter".
+        -sEXPORTED_RUNTIME_METHODS=noExitRuntime
         -fexceptions -lwebsocket.js)
