@@ -7,7 +7,10 @@
 // src/ui/wasm/CMakeLists.txt and consumed from web/ (React/Vite host page), which sets
 // window.LIGHTNING_WS_URL before instantiating the module.
 #include <emscripten.h>
+#include <emscripten/bind.h>
 #include <emscripten/websocket.h>
+
+#include <pangolin/var/var.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -184,7 +187,21 @@ void MainLoopStep() {
     }
 }
 
+// Pangolin's own on-canvas "menu" panel (CreateMenu() in pangolin_ui_scene.cc) doesn't
+// actually draw anything under this Emscripten/ES3 Pangolin build — confirmed by screenshot,
+// its region just stays clear-color black, not a rendering pipeline we own or want to debug.
+// So the host page (web/) drives the exact same underlying pangolin::Var<bool> state these
+// bindings expose, by name — the same mechanism the (invisible) panel checkbox/button would
+// use, just triggered from real HTML controls instead.
+void SetFollow(bool follow) { pangolin::Var<bool>("menu.Follow") = follow; }
+void ResetView() { pangolin::Var<bool>("menu.Reset 3D View") = true; }
+
 }  // namespace
+
+EMSCRIPTEN_BINDINGS(lightning_ui_controls) {
+    emscripten::function("setFollow", &SetFollow);
+    emscripten::function("resetView", &ResetView);
+}
 
 // 宿主页面(web/)在加载本模块前把ws地址写到window.LIGHTNING_WS_URL上；不设置的话退回
 // localhost，方便脱离React页面单独调试。

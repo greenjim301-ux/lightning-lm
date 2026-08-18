@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CreateLightningUiModule } from './lightning-ui-module'
+import type { CreateLightningUiModule, LightningUiModule } from './lightning-ui-module'
 
 const DEFAULT_WS_URL = 'ws://localhost:9877'
 const WS_URL_STORAGE_KEY = 'lightning-ws-url'
@@ -26,6 +26,14 @@ export function LightningUiViewer() {
   const [wsUrlInput, setWsUrlInput] = useState(wsUrl)
   const [status, setStatus] = useState<Status>('loading')
   const [error, setError] = useState<string | null>(null)
+  // Defaults to on, unlike the native desktop app's menu.Follow (which defaults off there
+  // because its on-canvas panel makes toggling it a click away). The panel doesn't actually
+  // render under this Emscripten/ES3 Pangolin build (see the embind bindings in
+  // wasm_ui_client.cc this calls into), so defaulting off here would leave a first-time
+  // viewer staring at a static patch of ground the vehicle drives out of within seconds —
+  // easy to mistake for a broken/frozen page rather than a camera that isn't tracking yet.
+  const [follow, setFollowState] = useState(true)
+  const moduleRef = useRef<LightningUiModule | null>(null)
   // wasm_ui_client.cc's main() reads window.LIGHTNING_WS_URL once at startup and runs forever
   // via emscripten_set_main_loop — there's no teardown path, so React StrictMode's dev-mode
   // double-invoke of effects would open a second websocket/canvas context onto the same
@@ -41,12 +49,27 @@ export function LightningUiViewer() {
 
     nativeDynamicImport('/wasm/lightning_ui_wasm_client.mjs')
       .then((mod) => mod.default())
-      .then(() => setStatus('running'))
+      .then((instance) => {
+        moduleRef.current = instance
+        instance.setFollow(follow)
+        setStatus('running')
+      })
       .catch((err: unknown) => {
         setStatus('error')
         setError(err instanceof Error ? err.message : String(err))
       })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only ever runs once, see startedRef
   }, [wsUrl])
+
+  function handleFollowChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const next = e.target.checked
+    setFollowState(next)
+    moduleRef.current?.setFollow(next)
+  }
+
+  function handleResetView() {
+    moduleRef.current?.resetView()
+  }
 
   function handleReconnect(e: React.FormEvent) {
     e.preventDefault()
@@ -69,6 +92,13 @@ export function LightningUiViewer() {
           spellCheck={false}
         />
         <button type="submit">Reconnect</button>
+        <label className="lightning-ui-follow">
+          <input type="checkbox" checked={follow} disabled={status !== 'running'} onChange={handleFollowChange} />
+          Follow
+        </label>
+        <button type="button" disabled={status !== 'running'} onClick={handleResetView}>
+          Reset 3D View
+        </button>
         <span className={`lightning-ui-status lightning-ui-status--${status}`}>
           {status === 'loading' && 'loading wasm module…'}
           {status === 'running' && `running — check console for websocket connect status (${wsUrl})`}

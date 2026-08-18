@@ -3,10 +3,14 @@
 // by scripts/sync-wasm.sh). The module itself isn't type-checked — this just describes
 // enough of the default Emscripten factory export shape for the dynamic import below.
 export interface LightningUiModule {
-  // Emscripten's default MODULARIZE export doesn't expose anything we call directly:
   // main() runs automatically on instantiation and drives everything through the
   // canvas + the UiWireServer websocket connection opened in wasm_ui_client.cc.
-  [key: string]: unknown;
+  // These two are the only calls the host page makes into the module: embind bindings
+  // (EMSCRIPTEN_BINDINGS in wasm_ui_client.cc) that write straight into the same
+  // pangolin::Var<bool> state Pangolin's own (non-rendering, under this ES3/wasm build)
+  // on-canvas menu panel would — see LightningUiViewer.tsx for why.
+  setFollow(follow: boolean): void
+  resetView(): void
 }
 
 export type CreateLightningUiModule = (overrides?: Record<string, unknown>) => Promise<LightningUiModule>;

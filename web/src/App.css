@@ -20,10 +20,17 @@
   font-size: 0.9rem;
 }
 
-.lightning-ui-toolbar input {
+.lightning-ui-toolbar input#ws-url {
   font-family: monospace;
   min-width: 20rem;
   padding: 0.25rem 0.5rem;
+}
+
+.lightning-ui-follow {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
 }
 
 .lightning-ui-status--error {

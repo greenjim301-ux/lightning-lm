@@ -32,6 +32,11 @@ std::vector<UiPoint> ToUiPoints(const CloudPtr& cloud) {
 
 constexpr auto kFrontendPoseMinInterval = std::chrono::milliseconds(33);  // ~30Hz上限
 constexpr auto kKeyframeSyncInterval = std::chrono::milliseconds(300);    // ~3Hz
+// offline回放（run_slam_offline）没有任何限速，实测能跑到真实传感器速率的3~5倍；每个scan消息
+// 是全分辨率点云（几千到上万点，几十上百KB），wasm端每条都要重建GL buffer+上传，跟不上时会在
+// 浏览器的websocket消息队列里排队积压——因为是单条有序连接，连轨迹/位姿这种廉价消息也会被
+// 堵在积压的scan消息后面一起变慢。在这里限速到接近真实传感器速率，跟SendFrontendPose同样的思路。
+constexpr auto kScanMinInterval = std::chrono::milliseconds(80);  // ~12.5Hz上限
 
 /// 一个websocket客户端连接。v1只服务单个客户端：新连接进来就顶替旧的。
 class Session : public std::enable_shared_from_this<Session> {
@@ -124,6 +129,7 @@ struct UiWireServer::Impl {
     bool have_frontend_pose = false;
     SE3 last_frontend_pose;
     std::chrono::steady_clock::time_point last_frontend_pose_sent{};
+    std::chrono::steady_clock::time_point last_scan_sent{};
     // 关键帧的shared_ptr本身留着（不只是拷贝一份pose出来）：闭环优化会通过这些shared_ptr别名
     // 就地改pose，定时器要能重新读到最新值，见ScheduleKeyframeSync的注释。
     std::vector<std::shared_ptr<Keyframe>> keyframes;
@@ -365,9 +371,14 @@ void UiWireServer::Impl::SendFrontendPose(const SE3& pose, bool is_traj_point) {
         std::lock_guard<std::mutex> lock(state_mtx);
         have_frontend_pose = true;
         last_frontend_pose = pose;
-        // 轨迹打点(来自UpdateNavState)不节流——丢了会让画出来的轨迹出现缺口；
-        // 只有UpdateRecentPose这种纯粹"挪一下当前显示位置"的高频调用才节流到kFrontendPoseMinInterval。
-        send = is_traj_point || (now - last_frontend_pose_sent) >= kFrontendPoseMinInterval;
+        // 之前这里对轨迹打点(is_traj_point，来自UpdateNavState)完全不限速，理由是"丢了会让画出来的
+        // 轨迹出现缺口"——但实测发现UpdateNavState其实在ProcessIMU()里按IMU频率调用(laser_mapping.cc)，
+        // 离线回放(run_slam_offline)没有限速、又跑得比实时快好几倍时，这个"零节流"路径能打到
+        // 上千条/秒，把浏览器主线程的websocket消息处理占满，连requestAnimationFrame都排不上号——
+        // wasm端一直在正确解码消息(计数器验证过)，但画面因为从来没机会真正合成新的一帧，
+        // 表现得像是"卡住不动"，而不是单纯变慢。kFrontendPoseMinInterval(~30Hz)对任何人眼可感的
+        // 轨迹平滑度都绰绰有余，不会出现真正意义上的"缺口"，所以两种调用统一走同一个节流。
+        send = (now - last_frontend_pose_sent) >= kFrontendPoseMinInterval;
         if (send) last_frontend_pose_sent = now;
     }
     if (!send) return;
@@ -387,6 +398,15 @@ void UiWireServer::UpdatePredictPose(const SE3& /*pose*/) {
 }
 
 void UiWireServer::UpdateScan(CloudPtr cloud, const SE3& pose) {
+    auto now = std::chrono::steady_clock::now();
+    bool send;
+    {
+        std::lock_guard<std::mutex> lock(impl_->state_mtx);
+        send = (now - impl_->last_scan_sent) >= kScanMinInterval;
+        if (send) impl_->last_scan_sent = now;
+    }
+    if (!send) return;
+
     wire::WireWriter w(wire::MsgType::kScan);
     w.WritePose(pose);
     w.WritePoints(ToUiPoints(cloud));
